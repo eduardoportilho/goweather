@@ -9,23 +9,23 @@ import (
 )
 
 func main() {
-    mw := multiWeatherProvider{
-        openWeatherMap{},
-        weatherUnderground{apiKey: "your-key-here"},
+    multiWeatherProvider := MultiWeatherProvider{
+        OpenWeatherMapProvider{apiKey: "your-key-here"},
+        WeatherUndergroundProvider{apiKey: "your-key-here"},
     }
 
-    http.HandleFunc("/weather/", func(w http.ResponseWriter, r *http.Request) {
+    http.HandleFunc("/weather/", func(writer http.ResponseWriter, request *http.Request) {
         begin := time.Now()
-        city := strings.SplitN(r.URL.Path, "/", 3)[2]
+        city := strings.SplitN(request.URL.Path, "/", 3)[2]
 
-        temp, err := mw.temperature(city)
+        temp, err := multiWeatherProvider.temperature(city)
         if err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
+            http.Error(writer, err.Error(), http.StatusInternalServerError)
             return
         }
 
-        w.Header().Set("Content-Type", "application/json; charset=utf-8")
-        json.NewEncoder(w).Encode(map[string]interface{}{
+        writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+        json.NewEncoder(writer).Encode(map[string]interface{}{
             "city": city,
             "temp": temp,
             "took": time.Since(begin).String(),
@@ -35,82 +35,76 @@ func main() {
     http.ListenAndServe(":8080", nil)
 }
 
-type weatherProvider interface {
+type WeatherProvider interface {
     temperature(city string) (float64, error) // in Kelvin, naturally
 }
 
-type openWeatherMap struct{}
+type OpenWeatherMapProvider struct {
+    apiKey string
+}
 
-func (w openWeatherMap) temperature(city string) (float64, error) {
-    apiKey := "YOUR_API_KEY"
-    resp, err := http.Get("http://api.openweathermap.org/data/2.5/weather?APPID=" + apiKey + "&q=" + city)
+func (openWeatherMapProvider OpenWeatherMapProvider) temperature(city string) (float64, error) {
+    resp, err := http.Get("http://api.openweathermap.org/data/2.5/weather?APPID=" + openWeatherMapProvider.apiKey + "&q=" + city)
     if err != nil {
         return 0, err
     }
 
     defer resp.Body.Close()
 
-    var d struct {
+    var openWeatherMapResponse struct {
         Main struct {
             Kelvin float64 `json:"temp"`
         } `json:"main"`
     }
 
-    if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+    if err := json.NewDecoder(resp.Body).Decode(&openWeatherMapResponse); err != nil {
         return 0, err
     }
 
-    log.Printf("openWeatherMap: %s: %.2f", city, d.Main.Kelvin)
-    return d.Main.Kelvin, nil
+    log.Printf("openWeatherMap: %s: %.2f", city, openWeatherMapResponse.Main.Kelvin)
+    return openWeatherMapResponse.Main.Kelvin, nil
 }
 
-type weatherUnderground struct {
+type WeatherUndergroundProvider struct {
     apiKey string
 }
 
-func (w weatherUnderground) temperature(city string) (float64, error) {
-    resp, err := http.Get("http://api.wunderground.com/api/" + w.apiKey + "/conditions/q/" + city + ".json")
+func (weatherUndergroundProvider WeatherUndergroundProvider) temperature(city string) (float64, error) {
+    resp, err := http.Get("http://api.wunderground.com/api/" + weatherUndergroundProvider.apiKey + "/conditions/q/" + city + ".json")
     if err != nil {
         return 0, err
     }
 
     defer resp.Body.Close()
 
-    var d struct {
+    var weatherUndergroundResponse struct {
         Observation struct {
             Celsius float64 `json:"temp_c"`
         } `json:"current_observation"`
     }
 
-    if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+    if err := json.NewDecoder(resp.Body).Decode(&weatherUndergroundResponse); err != nil {
         return 0, err
     }
 
-    kelvin := d.Observation.Celsius + 273.15
+    kelvin := weatherUndergroundResponse.Observation.Celsius + 273.15
     log.Printf("weatherUnderground: %s: %.2f", city, kelvin)
     return kelvin, nil
 }
 
-type multiWeatherProvider []weatherProvider
+type MultiWeatherProvider []WeatherProvider
 
-func (w multiWeatherProvider) temperature(city string) (float64, error) {
+func (multiWeatherProvider MultiWeatherProvider) temperature(city string) (float64, error) {
     sum := 0.0
 
-    for _, provider := range w {
-        k, err := provider.temperature(city)
+    for _, provider := range multiWeatherProvider {
+        temperatureKelvin, err := provider.temperature(city)
         if err != nil {
             return 0, err
         }
 
-        sum += k
+        sum += temperatureKelvin
     }
 
-    return sum / float64(len(w)), nil
-}
-
-type weatherData struct {
-    Name string `json:"name"`
-    Main struct {
-        Kelvin float64 `json:"temp"`
-    } `json:"main"`
+    return sum / float64(len(multiWeatherProvider)), nil
 }
